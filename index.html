@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Loja Canada v4 · build 2026-07-15 · Nuvem Firebase automática (config embutida) + aba Nuvem (Online) -->
 <title>Loja Canada — Foguetes & Poções · Oberon MC</title>
 <meta name="description" content="Loja Canada — a loja de jogador mais completa do Oberon MC: foguetes e poções com o melhor preço. Veja o catálogo, preços e novidades!">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='4' width='24' height='24' rx='5' fill='%23DC2626'/%3E%3Crect x='9' y='9' width='14' height='5' fill='%230A0A0A'/%3E%3Crect x='9' y='18' width='14' height='5' fill='%230A0A0A'/%3E%3C/svg%3E">
@@ -693,6 +694,17 @@ function mutate(fn, toastMsg){
      atualizações do admin em tempo real
    ============================================================ */
 const CLOUD_KEY = 'oberonmc_cloud_cfg';
+/* Config pública do Firebase (por design pode ficar exposta).
+   Qualquer visitante conecta nessa nuvem automaticamente. */
+const CLOUD_DEFAULT = {
+  apiKey: "AIzaSyCTmDj0Os4Q41eQS3adCpq8rMdw17K5AeM",
+  authDomain: "minecraft-a716b.firebaseapp.com",
+  databaseURL: "https://minecraft-a716b-default-rtdb.firebaseio.com",
+  projectId: "minecraft-a716b",
+  storageBucket: "minecraft-a716b.firebasestorage.app",
+  messagingSenderId: "697247634378",
+  appId: "1:697247634378:web:1da704fbe01ea350f9b533"
+};
 var CLOUD = { on:false, status:'off', ref:null, mod:null, lastW:null };
 function cloudSavedCfg(){ try{ return JSON.parse(localStorage.getItem(CLOUD_KEY)||'null'); }catch(e){ return null; } }
 
@@ -1550,8 +1562,20 @@ document.addEventListener('submit', e=>{
   else if(type==='cloudcfg'){
     let raw = fd.get('cfg').trim();
     try{
-      const m = raw.match(/\{[\s\S]*\}/);
-      const cfg = JSON.parse(m ? m[0] : raw);
+      // extrai o bloco que contém apiKey (ignora imports/comentários colados junto)
+      let json;
+      const idx = raw.indexOf('apiKey');
+      if(idx !== -1){
+        const start = raw.lastIndexOf('{', idx);
+        const end = raw.indexOf('}', idx);
+        json = raw.slice(start, end+1);
+      } else {
+        const m = raw.match(/\{[\s\S]*\}/);
+        json = m ? m[0] : raw;
+      }
+      // limpa "links de markdown" dos valores: "[texto](url)" → "texto"
+      json = json.replace(/"\s*\[([^\]]+)\]\([^)]*\)\s*"/g, '"$1"');
+      const cfg = JSON.parse(json);
       if(!cfg.apiKey || !cfg.databaseURL) throw new Error('incompleta');
       toast('Conectando à nuvem…', 'info', 'refresh');
       cloudConnect(cfg, false);
@@ -1629,10 +1653,10 @@ window.addEventListener('DOMContentLoaded', ()=>{
   if(location.hash) parseHash();
   render();
   updateCloudBadge();
-  const savedCfg = cloudSavedCfg();   // reconecta automaticamente
+  const savedCfg = cloudSavedCfg() || CLOUD_DEFAULT;   // reconecta automaticamente
   if(savedCfg && savedCfg.apiKey && savedCfg.databaseURL) cloudConnect(savedCfg, true);
   setTimeout(()=>{ $('#intro').classList.add('hide'); setTimeout(()=>$('#intro').remove(), 700); }, 1550);
 });
   </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1b9cdd70ed2c6ce',t:'MTc4NDEyOTM4MA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1ba4c90bb6cf20f',t:'MTc4NDEzNDU3MQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
