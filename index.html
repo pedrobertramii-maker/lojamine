@@ -505,6 +505,7 @@ footer.site-foot b{color:var(--muted)}
           <span class="live-dot"></span>
           <span><b>Loja aberta</b> — venha comprar!</span>
         </div>
+        <div class="sb-online" id="cloudStatus" style="font-size:12px"></div>
         <button class="admin-gear" data-action="nav" data-view="admin">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           Painel Admin
@@ -665,6 +666,7 @@ const bc = hasBC ? new BroadcastChannel('oberonmc_realtime') : null;
 function persist(broadcast = true){
   localStorage.setItem(DB_KEY, JSON.stringify(state));
   if(broadcast && bc) bc.postMessage({ t:'sync', s: state });
+  if(broadcast && CLOUD && CLOUD.on) cloudPush(); // publica na nuvem pro mundo todo
 }
 function applyRemote(newState){
   state = newState;
@@ -683,6 +685,91 @@ function mutate(fn, toastMsg){
   persist(true);
   render();
   if(toastMsg) toast(toastMsg, 'success', 'check');
+}
+
+/* ============================================================
+   SINCRONIZAÇÃO EM NUVEM (Firebase Realtime Database)
+   → quando conectado, TODOS os visitantes recebem as
+     atualizações do admin em tempo real
+   ============================================================ */
+const CLOUD_KEY = 'oberonmc_cloud_cfg';
+var CLOUD = { on:false, status:'off', ref:null, mod:null, lastW:null };
+function cloudSavedCfg(){ try{ return JSON.parse(localStorage.getItem(CLOUD_KEY)||'null'); }catch(e){ return null; } }
+
+async function cloudConnect(cfg, silent){
+  try{
+    CLOUD.status = 'connecting'; updateCloudBadge();
+    const appMod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
+    const dbMod  = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js');
+    const app = appMod.initializeApp(cfg);
+    const db  = dbMod.getDatabase(app);
+    CLOUD.mod = dbMod;
+    CLOUD.ref = dbMod.ref(db, 'loja/state');
+    // escuta em tempo real: qualquer mudança chega na hora
+    dbMod.onValue(CLOUD.ref, snap=>{
+      const s = snap.val();
+      if(!s || (s._w && s._w === CLOUD.lastW)) return;
+      CLOUD.lastW = s._w || null;
+      state = s;
+      localStorage.setItem(DB_KEY, JSON.stringify(state));
+      render();
+      if(!silent || CLOUD.on) toast('Dados sincronizados da nuvem ☁️', 'sync', 'refresh');
+    });
+    CLOUD.on = true; CLOUD.status = 'on';
+    localStorage.setItem(CLOUD_KEY, JSON.stringify(cfg));
+    updateCloudBadge();
+    if(!silent) toast('Conectado à nuvem! ☁️', 'success', 'globe');
+    // se a nuvem estiver vazia, publica meus dados atuais
+    const cur = await dbMod.get(CLOUD.ref);
+    if(!cur.exists()) cloudPush();
+    render();
+  }catch(err){
+    console.error(err);
+    CLOUD.on = false; CLOUD.status = 'off'; updateCloudBadge();
+    if(!silent) toast('Falha ao conectar na nuvem — confira a config', 'error', 'x');
+  }
+}
+function cloudDisconnect(){
+  try{ if(CLOUD.mod && CLOUD.ref) CLOUD.mod.off(CLOUD.ref); }catch(e){}
+  CLOUD = { on:false, status:'off', ref:null, mod:null, lastW:null };
+  localStorage.removeItem(CLOUD_KEY);
+  updateCloudBadge();
+  toast('Nuvem desconectada — modo local ativado', 'warn', 'refresh');
+  render();
+}
+function cloudPush(){
+  if(!CLOUD.on || !CLOUD.ref) return;
+  const w = uid(); CLOUD.lastW = w;
+  const payload = JSON.parse(JSON.stringify(state)); payload._w = w;
+  CLOUD.mod.set(CLOUD.ref, payload).catch(err=>{ console.warn('cloud push falhou', err); toast('Falha ao publicar na nuvem', 'error', 'x'); });
+}
+function updateCloudBadge(){
+  const el = document.getElementById('cloudStatus'); if(!el) return;
+  if(CLOUD.status==='on') el.innerHTML = `<span class="live-dot"></span><span style="color:#6EE7B7"><b>☁️ Nuvem ativa</b> — sync global</span>`;
+  else if(CLOUD.status==='connecting') el.innerHTML = `<span class="live-dot" style="background:var(--amber);box-shadow:0 0 10px var(--amber)"></span><span style="color:var(--amber)">Conectando à nuvem…</span>`;
+  else el.innerHTML = `<span style="width:8px;height:8px;border-radius:50%;background:#525252;flex:none"></span><span style="color:var(--muted-2)">Modo local (só este navegador)</span>`;
+}
+/* link público: a config vai embutida no endereço, então
+   qualquer visitante conecta na mesma nuvem automaticamente */
+function cloudPublicLink(){
+  const cfg = cloudSavedCfg(); if(!cfg) return '';
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(cfg))))
+    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  return location.origin + location.pathname + '#cfg=' + b64;
+}
+function cloudHandleHash(){
+  const m = location.hash.match(/cfg=([A-Za-z0-9\-_]+)/);
+  if(!m) return;
+  try{
+    const json = decodeURIComponent(escape(atob(m[1].replace(/-/g,'+').replace(/_/g,'/'))));
+    const cfg = JSON.parse(json);
+    if(cfg && cfg.apiKey && cfg.databaseURL){
+      localStorage.setItem(CLOUD_KEY, JSON.stringify(cfg));
+      toast('Link da loja detectado — conectando à nuvem ☁️', 'sync', 'globe');
+    }
+  }catch(e){}
+  history.replaceState(null,'',location.pathname + location.search);
+  location.hash = '#/home';
 }
 
 /* ---------- Toasts ---------- */
@@ -1022,6 +1109,7 @@ const ADM_TABS = [
   ['atualizacoes','mega','Novidades'],
   ['sugestoes','send','Pedidos'],
   ['home','home','Início & Sobre'],
+  ['nuvem','globe','Nuvem (Online)'],
   ['seguranca','key','Segurança']
 ];
 
@@ -1058,6 +1146,7 @@ function admContent(){
   if(admTab==='atualizacoes') return admUpdates();
   if(admTab==='sugestoes') return admSugestoes();
   if(admTab==='home') return admHome();
+  if(admTab==='nuvem') return admNuvem();
   if(admTab==='seguranca') return admSeguranca();
   return '';
 }
@@ -1231,6 +1320,42 @@ function admHome(){
   </div>`;
 }
 
+function admNuvem(){
+  const cfg = cloudSavedCfg();
+  const ex = '{\n  "apiKey": "AIzaSy...",\n  "authDomain": "seuapp.firebaseapp.com",\n  "databaseURL": "https://seuapp-default-rtdb.firebaseio.com",\n  "projectId": "seuapp"\n}';
+  return `
+  <div class="adm-head"><h2>Sincronização em Nuvem ☁️</h2>
+    ${CLOUD.on?'<span class="status-chip st-aprovada" style="margin:0">Conectado</span>':'<span class="status-chip st-rejeitada" style="margin:0">Desconectado</span>'}</div>
+  <div class="card" style="padding:24px;max-width:780px">
+    <p style="font-size:13.5px;color:var(--muted);line-height:1.75">
+      Por padrão o site salva os dados <b style="color:#fff">só no seu navegador</b> (localStorage). Para que
+      <b style="color:#fff">todos os players vejam suas atualizações em tempo real</b>, conecte um projeto
+      <b style="color:var(--gold)">Firebase Realtime Database</b> (grátis). Passo a passo completo no arquivo <b style="color:#fff">GUIA.md</b>.
+    </p>
+    <div class="shop-note" style="margin:18px 0">${I('bulb')}<span><b style="color:var(--text)">Resumo:</b> 1) crie um projeto no <b style="color:var(--gold)">console.firebase.google.com</b> → 2) ative o <b style="color:var(--gold)">Realtime Database</b> com regras públicas → 3) copie a <b style="color:var(--gold)">config do app web</b> → 4) cole aqui e conecte → 5) hospede o site e divulgue o <b style="color:var(--gold)">link com sync</b>.</span></div>
+    ${!CLOUD.on ? `
+    <form data-form="cloudcfg">
+      <div class="field"><label>Config do Firebase (cole o JSON aqui)</label>
+        <textarea name="cfg" required style="min-height:150px;font-family:ui-monospace,monospace;font-size:12px" placeholder='${ex}'></textarea>
+        <small>Pode colar o <code>firebaseConfig = {...}</code> inteiro do console — eu extraio só o JSON.</small></div>
+      <button class="btn btn-gold">${I('globe')} Conectar à nuvem</button>
+    </form>` : `
+    <div class="stat-mini">
+      <div class="sm"><b style="color:#6EE7B7;font-size:15px">☁️ ${esc(cfg && cfg.projectId || 'projeto')}</b><span>Projeto conectado</span></div>
+      <div class="sm"><b>${state.items.length + state.updates.length + state.suggestions.length + state.staff.length}</b><span>Registros publicados</span></div>
+    </div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap">
+      <button class="btn btn-gold" data-action="cloud-push">${I('refresh')} Publicar dados atuais na nuvem</button>
+      <button class="btn" data-action="cloud-copylink">${I('copy')} Copiar link público com sync</button>
+      <button class="btn btn-danger" data-action="cloud-disconnect">${I('x')} Desconectar</button>
+    </div>
+    <p style="margin-top:16px;font-size:12px;color:var(--muted-2);line-height:1.7">
+      O <b style="color:var(--muted)">link público com sync</b> já traz a config embutida no endereço: ao abrir, o site conecta sozinho na mesma nuvem.
+      Hospede o <b style="color:var(--muted)">index.html</b> online (Netlify, GitHub Pages...) e divulgue esse link pros players. A partir daí, qualquer edição sua aparece <b style="color:var(--muted)">instantaneamente</b> na tela deles — sem recarregar.
+    </p>`}
+  </div>`;
+}
+
 function admSeguranca(){
   const isDefault = state.admin.pass === String(hash('admin'));
   return `
@@ -1337,6 +1462,17 @@ document.addEventListener('click', e=>{
       toast('Dados restaurados para o padrão', 'warn', 'refresh');
     });
   }
+  /* Nuvem */
+  else if(a==='cloud-push'){ cloudPush(); toast('Dados publicados na nuvem ☁️', 'success', 'refresh'); }
+  else if(a==='cloud-disconnect'){ cloudDisconnect(); }
+  else if(a==='cloud-copylink'){
+    const link = cloudPublicLink();
+    if(!link){ toast('Conecte na nuvem primeiro', 'warn', 'x'); return; }
+    const done = ()=>toast('Link com sync copiado ☁️', 'success', 'copy');
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(link).then(done).catch(()=>{fallbackCopy(link);done();});
+    } else { fallbackCopy(link); done(); }
+  }
 });
 function fallbackCopy(text){
   const ta = document.createElement('textarea');
@@ -1411,6 +1547,16 @@ document.addEventListener('submit', e=>{
     mutate(s=>{ s.admin.pass = String(hash(fd.get('new1'))); }, 'Senha do admin alterada');
     f.reset();
   }
+  else if(type==='cloudcfg'){
+    let raw = fd.get('cfg').trim();
+    try{
+      const m = raw.match(/\{[\s\S]*\}/);
+      const cfg = JSON.parse(m ? m[0] : raw);
+      if(!cfg.apiKey || !cfg.databaseURL) throw new Error('incompleta');
+      toast('Conectando à nuvem…', 'info', 'refresh');
+      cloudConnect(cfg, false);
+    }catch(err){ toast('JSON inválido — revise a config', 'error', 'x'); }
+  }
 });
 
 /* Busca da loja (com restauração de foco) */
@@ -1479,10 +1625,14 @@ $('#menuBtn').addEventListener('click', ()=>{ $('#sidebar').classList.add('open'
 
 /* ---------- Boot ---------- */
 window.addEventListener('DOMContentLoaded', ()=>{
+  cloudHandleHash();          // link com sync? captura a config embutida
   if(location.hash) parseHash();
   render();
+  updateCloudBadge();
+  const savedCfg = cloudSavedCfg();   // reconecta automaticamente
+  if(savedCfg && savedCfg.apiKey && savedCfg.databaseURL) cloudConnect(savedCfg, true);
   setTimeout(()=>{ $('#intro').classList.add('hide'); setTimeout(()=>$('#intro').remove(), 700); }, 1550);
 });
   </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1b9ac40cbf2f1cf',t:'MTc4NDEyODAwNQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1b9cdd70ed2c6ce',t:'MTc4NDEyOTM4MA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
